@@ -3,6 +3,9 @@ services:
     build: .
     container_name: support-query-tool
     restart: unless-stopped
+    labels:
+      # Watchtower soll dieses Support-Tool vorerst nicht automatisch aktualisieren.
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
       PORT: "${PORT:-8080}"
       SUPPORT_PASSWORD: "${SUPPORT_PASSWORD:?SUPPORT_PASSWORD muss in .env gesetzt werden}"
@@ -16,6 +19,17 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - deno
+        - eval
+        - --allow-net
+        - "const response = await fetch('http://127.0.0.1:8080/api/health'); if (!response.ok) Deno.exit(1);"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - npm-network
 
@@ -23,4 +37,3 @@ networks:
   npm-network:
     external: true
     name: npm-network
-
