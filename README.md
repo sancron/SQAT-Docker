@@ -49,7 +49,7 @@ Die Compose-Datei enthält einen Healthcheck auf `/api/health` und das Label `co
 
 ## Sicherheit
 
-Das Support-Passwort wird nur serverseitig geprüft. Die Sitzung nutzt ein HttpOnly-/SameSite-Cookie. RCON-Passwörter werden nicht geloggt und nicht persistiert. Für den Betrieb im Internet sollte zusätzlich ein Reverse Proxy mit HTTPS eingesetzt werden; dann `COOKIE_SECURE=true` setzen. Das Tool sollte nur für eigene bzw. ausdrücklich zur Prüfung freigegebene Server verwendet werden.
+Das Support-Passwort wird nur serverseitig geprüft. Die Sitzung nutzt ein HttpOnly-/SameSite-Cookie. RCON-Passwörter werden nicht geloggt und nicht persistiert. Für den Betrieb im Internet sollte zusätzlich ein Reverse Proxy mit HTTPS eingesetzt werden; dann `COOKIE_SECURE=true` setzen. Der Footer-Rechtshinweis kann über `FOOTER_NOTICE` als Stack-/ENV-Variable angepasst werden. Das Tool sollte nur für eigene bzw. ausdrücklich zur Prüfung freigegebene Server verwendet werden.
 
 ## Unterstützte Spiele und Protokolle
 
