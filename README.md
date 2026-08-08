@@ -45,6 +45,8 @@ deno task start
 
 Das bestehende externe Docker-Netzwerk `npm-network` wird wie beim Path-of-Titans-Tool erwartet. Falls es auf dem Host noch nicht existiert, einmalig anlegen oder den Netzwerkabschnitt auf das vorhandene Reverse-Proxy-Netzwerk anpassen.
 
+Die Compose-Datei enthält einen Healthcheck auf `/api/health` und das Label `com.centurylinklabs.watchtower.enable=false`. Watchtower aktualisiert diesen Container dadurch vorerst nicht automatisch.
+
 ## Sicherheit
 
 Das Support-Passwort wird nur serverseitig geprüft. Die Sitzung nutzt ein HttpOnly-/SameSite-Cookie. RCON-Passwörter werden nicht geloggt und nicht persistiert. Für den Betrieb im Internet sollte zusätzlich ein Reverse Proxy mit HTTPS eingesetzt werden; dann `COOKIE_SECURE=true` setzen. Das Tool sollte nur für eigene bzw. ausdrücklich zur Prüfung freigegebene Server verwendet werden.

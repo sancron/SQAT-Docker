@@ -19,7 +19,7 @@ Das Tool entscheidet nicht anhand des Spielnamens, sondern anhand einer echten P
 
 ### A2S-Hinweise
 
-Der A2S-Adapter fragt zuerst die Basisinformationen ab. `A2S_PLAYER` und `A2S_RULES` werden separat versucht. Wenn ein Server diese Zusatzabfragen nicht anbietet, zeigt das Tool trotzdem die Basisinformationen und kennzeichnet die fehlenden Daten. Das ist unter anderem bei Conan Exiles, Arma Reforger und einzelnen DayZ-/Zomboid-Versionen zu erwarten.
+Der A2S-Adapter führt den Challenge-Handshake auf demselben UDP-Socket wie die ursprüngliche Anfrage aus. Das ist für Server wichtig, die den Challenge an den Absender-Port binden, darunter bestimmte Path-of-Titans-Deployments. Zusätzlich werden optionale A2S-EDF-Felder wie Serverport, Steam-ID, SourceTV-Daten, Schlagwörter und Game-ID angezeigt. `A2S_PLAYER` und `A2S_RULES` werden separat versucht. Wenn ein Server diese Zusatzabfragen nicht anbietet, zeigt das Tool trotzdem die Basisinformationen und kennzeichnet die fehlenden Daten. Das ist unter anderem bei Conan Exiles, Arma Reforger und einzelnen DayZ-/Zomboid-Versionen zu erwarten.
 
 Bei Path of Titans muss die Source-Query-Funktion serverseitig aktiviert sein; laut der dokumentierten Serverkonfiguration liegt der Query-Port häufig beim Spielport plus 4. Maßgeblich ist der Port aus dem Hosting-Panel.
 

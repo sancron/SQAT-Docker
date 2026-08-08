@@ -285,8 +285,9 @@ function parseA2sInfo(data: Uint8Array): Record<string, FieldValue> {
   const environmentCode = data[offset++];
   const visibility = data[offset++] === 0 ? "Öffentlich" : "Passwortgeschützt";
   const vac = data[offset++] === 1;
-  const [version] = readCString(data, offset);
-  return {
+  const [version, versionOffset] = readCString(data, offset);
+  offset = versionOffset;
+  const fields: Record<string, FieldValue> = {
     "Protokollversion": protocol,
     "Servername": name,
     "Karte": map,
@@ -314,6 +315,79 @@ function parseA2sInfo(data: Uint8Array): Record<string, FieldValue> {
     "VAC": vac ? "Aktiv" : "Nicht aktiv",
     "Serverversion": version,
   };
+  // Optional EDF data is appended by many current Steam/A2S servers.
+  if (offset < data.length) {
+    const edf = data[offset++];
+    if (edf & 0x80) {
+      fields["Serverport"] = readUInt16LE(data, offset);
+      offset += 2;
+    }
+    if (edf & 0x10) {
+      if (offset + 8 > data.length) {
+        throw new Error("Unvollständige A2S_STEAMID-Daten.");
+      }
+      fields["Steam-ID"] = new DataView(
+        data.buffer,
+        data.byteOffset + offset,
+        8,
+      ).getBigUint64(0, true).toString();
+      offset += 8;
+    }
+    if (edf & 0x40) {
+      fields["SourceTV-Port"] = readUInt16LE(data, offset);
+      offset += 2;
+      const [sourceTvName, sourceTvOffset] = readCString(data, offset);
+      fields["SourceTV-Name"] = sourceTvName;
+      offset = sourceTvOffset;
+    }
+    if (edf & 0x20) {
+      const [keywords, keywordsOffset] = readCString(data, offset);
+      fields["Schlagwörter"] = keywords;
+      offset = keywordsOffset;
+    }
+    if (edf & 0x01) {
+      if (offset + 8 > data.length) {
+        throw new Error("Unvollständige A2S_GAMEID-Daten.");
+      }
+      fields["Game-ID"] = new DataView(
+        data.buffer,
+        data.byteOffset + offset,
+        8,
+      ).getBigUint64(0, true).toString();
+    }
+  }
+  return fields;
+}
+
+function sendUdpOnSocket(
+  socket: ReturnType<typeof createSocket>,
+  packet: Uint8Array,
+  host: string,
+  port: number,
+  timeoutMs = QUERY_TIMEOUT_MS,
+): Promise<Uint8Array> {
+  return timeout(
+    new Promise<Uint8Array>((resolve, reject) => {
+      const cleanup = () => {
+        socket.off("error", onError);
+        socket.off("message", onMessage);
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const onMessage = (message: Uint8Array) => {
+        cleanup();
+        resolve(message);
+      };
+      socket.once("error", onError);
+      socket.once("message", onMessage);
+      socket.send(packet, port, targetHost(host), (error) => {
+        if (error) onError(error);
+      });
+    }),
+    timeoutMs,
+  );
 }
 
 async function a2sRequest(
@@ -321,10 +395,28 @@ async function a2sRequest(
   port: number,
   packet: Uint8Array,
 ): Promise<Uint8Array> {
-  const first = await sendUdp(packet, host, port);
-  return isA2sChallenge(first)
-    ? sendUdp(concatBytes(packet, first.subarray(5, 9)), host, port)
-    : first;
+  const socket = createSocket(host.includes(":") ? "udp6" : "udp4");
+  try {
+    let response = await sendUdpOnSocket(socket, packet, host, port);
+    // Some servers, including Path of Titans deployments, bind the challenge
+    // to the originating UDP socket. Keep the same socket for the handshake.
+    for (let attempt = 0; attempt < 2 && isA2sChallenge(response); attempt++) {
+      response = await sendUdpOnSocket(
+        socket,
+        concatBytes(packet, response.subarray(5, 9)),
+        host,
+        port,
+      );
+    }
+    if (isA2sChallenge(response)) {
+      throw new Error("Der A2S-Challenge-Handshake wurde nicht akzeptiert.");
+    }
+    return response;
+  } finally {
+    try {
+      socket.close();
+    } catch { /* already closed */ }
+  }
 }
 
 function parseA2sPlayers(data: Uint8Array): Array<Record<string, FieldValue>> {
@@ -385,7 +477,18 @@ async function queryA2s(host: string, port: number): Promise<QueryResult> {
       502,
     );
   }
-  const fields = parseA2sInfo(infoResponse);
+  let fields: Record<string, FieldValue>;
+  try {
+    fields = parseA2sInfo(infoResponse);
+  } catch (error) {
+    throw new ToolError(
+      `Ungültige A2S_INFO-Antwort: ${
+        error instanceof Error ? error.message : "unbekannter Parserfehler"
+      }`,
+      "a2s_invalid_response",
+      502,
+    );
+  }
   const playerPacket = Uint8Array.from([
     0xff,
     0xff,
@@ -730,7 +833,7 @@ function appScript(): string {
 }
 
 function appPage(): string {
-  return `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Universelles Support Query und RCON Tool"><title>Support Query Tool</title>${styles()}</head><body><main class="shell"><header class="topbar"><div><p class="eyebrow">4Netplayers Support</p><h1>Support Query Tool</h1></div><button id="logout" class="secondary">Abmelden</button></header><nav class="tabs" aria-label="Bereiche"><button class="active" data-tab="query">Server Query</button><button data-tab="rcon">RCON-Konsole</button></nav><section id="tab-query" class="panel tab active"><h2>Serverinformationen abrufen</h2><p class="muted">Wähle einen Adapter oder nutze „Automatisch“. Je nach Spiel werden alle Daten angezeigt, die das jeweilige Protokoll liefert.</p><form id="query-form" class="stack"><div class="form-grid three"><label>IP-Adresse / Hostname<input id="query-host" required placeholder="203.0.113.10 oder server.example"></label><label>Port<input id="query-port" type="number" min="1" max="65535" value="27015" required></label><label>Query-Adapter<select id="query-transport"><option value="auto">Automatisch testen</option><option value="a2s">A2S / Steam Query (UDP)</option><option value="minecraft-java">Minecraft Java (TCP)</option><option value="minecraft-bedrock">Minecraft Bedrock / RakNet (UDP)</option><option value="satisfactory">Satisfactory Lightweight Query (UDP)</option><option value="fivem">FiveM HTTP Query</option><option value="palworld-rest">Palworld REST API (HTTP)</option></select></label></div><button id="query-submit" type="submit">Server abfragen</button></form><div id="query-result" class="result" aria-live="polite"></div><div class="muted"><strong>Hinweis:</strong> A2S ist für viele Steam-/Source-Server sowie häufig Arma 3, Arma Reforger, DayZ, Project Zomboid und Path of Titans geeignet. Spezialadapter decken Satisfactory, FiveM und Palworld REST ab. Aktivierung, Port und konkrete Daten hängen vom Server und Hosting-Setup ab.</div></section><section id="tab-rcon" class="panel tab"><h2>RCON-Befehl senden</h2><p class="muted">Wähle das zum Spiel passende RCON-Protokoll. RCON muss serverseitig aktiviert und aus dem Netzwerk erreichbar sein; Passwörter werden nur für die laufende Anfrage verwendet.</p><form id="rcon-form" class="stack"><div class="form-grid three"><label>IP-Adresse / Hostname<input id="rcon-host" required placeholder="203.0.113.10"></label><label>RCON-Port<input id="rcon-port" type="number" min="1" max="65535" value="27015" required></label><label>RCON-Adapter<select id="rcon-protocol"><option value="source-rcon">Source RCON / TCP (Path of Titans, Minecraft, Project Zomboid, Factorio, Eco …)</option><option value="battlEye-rcon">BattlEye / Bohemia RCon / UDP (Arma 3, DayZ, Arma Reforger)</option><option value="rust-websocket">Rust WebRCON / WebSocket</option></select></label></div><label>RCON-Passwort<input id="rcon-password" type="password" autocomplete="off" required></label><label>Befehl<textarea id="rcon-command" maxlength="512" required placeholder="status"></textarea><button id="rcon-submit" type="submit">Befehl senden</button></form><div id="rcon-result" class="result" aria-live="polite"></div></section></main><script>${appScript()}</script></body></html>`;
+  return `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Universelles Support Query und RCON Tool"><title>Support Query Tool</title>${styles()}</head><body><main class="shell"><header class="topbar"><div><p class="eyebrow">4Netplayers Support</p><h1>Support Query Tool</h1></div><button id="logout" class="secondary">Abmelden</button></header><nav class="tabs" aria-label="Bereiche"><button class="active" data-tab="query">Server Query</button><button data-tab="rcon">RCON-Konsole</button></nav><section id="tab-query" class="panel tab active"><h2>Serverinformationen abrufen</h2><p class="muted">Wähle einen Adapter oder nutze „Automatisch“. Je nach Spiel werden alle Daten angezeigt, die das jeweilige Protokoll liefert.</p><form id="query-form" class="stack"><div class="form-grid three"><label>IP-Adresse / Hostname<input id="query-host" required placeholder="203.0.113.10 oder server.example"></label><label>Query-Port<input id="query-port" type="number" min="1" max="65535" value="27015" required></label><label>Query-Adapter<select id="query-transport"><option value="auto">Automatisch testen</option><option value="a2s">A2S / Steam Query (UDP)</option><option value="minecraft-java">Minecraft Java (TCP)</option><option value="minecraft-bedrock">Minecraft Bedrock / RakNet (UDP)</option><option value="satisfactory">Satisfactory Lightweight Query (UDP)</option><option value="fivem">FiveM HTTP Query</option><option value="palworld-rest">Palworld REST API (HTTP)</option></select></label></div><button id="query-submit" type="submit">Server abfragen</button></form><div id="query-result" class="result" aria-live="polite"></div><div class="muted"><strong>Hinweis:</strong> A2S ist für viele Steam-/Source-Server sowie häufig Arma 3, Arma Reforger, DayZ, Project Zomboid und Path of Titans geeignet. Spezialadapter decken Satisfactory, FiveM und Palworld REST ab. Aktivierung, Port und konkrete Daten hängen vom Server und Hosting-Setup ab.</div></section><section id="tab-rcon" class="panel tab"><h2>RCON-Befehl senden</h2><p class="muted">Wähle das zum Spiel passende RCON-Protokoll. RCON muss serverseitig aktiviert und aus dem Netzwerk erreichbar sein; Passwörter werden nur für die laufende Anfrage verwendet.</p><form id="rcon-form" class="stack"><div class="form-grid three"><label>IP-Adresse / Hostname<input id="rcon-host" required placeholder="203.0.113.10"></label><label>RCON-Port<input id="rcon-port" type="number" min="1" max="65535" value="27015" required></label><label>RCON-Adapter<select id="rcon-protocol"><option value="source-rcon">Source RCON / TCP (Path of Titans, Minecraft, Project Zomboid, Factorio, Eco …)</option><option value="battlEye-rcon">BattlEye / Bohemia RCon / UDP (Arma 3, DayZ, Arma Reforger)</option><option value="rust-websocket">Rust WebRCON / WebSocket</option></select></label></div><label>RCON-Passwort<input id="rcon-password" type="password" autocomplete="off" required></label><label>Befehl<textarea id="rcon-command" maxlength="512" required placeholder="status"></textarea><button id="rcon-submit" type="submit">Befehl senden</button></form><div id="rcon-result" class="result" aria-live="polite"></div></section></main><script>${appScript()}</script></body></html>`;
 }
 
 async function readJson(request: Request): Promise<unknown> {
