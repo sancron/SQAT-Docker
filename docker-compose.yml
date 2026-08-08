@@ -24,7 +24,6 @@ services:
         - CMD
         - deno
         - eval
-        - --allow-net
         - "const response = await fetch('http://127.0.0.1:8080/api/health'); if (!response.ok) Deno.exit(1);"
       interval: 30s
       timeout: 5s
