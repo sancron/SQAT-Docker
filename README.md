@@ -56,3 +56,9 @@ Das Support-Passwort wird nur serverseitig geprüft. Die Sitzung nutzt ein HttpO
 Die vollständige Matrix mit Status, Ports, Voraussetzungen und Quellen steht in [`docs/SUPPORTED_GAMES.md`](docs/SUPPORTED_GAMES.md). Entscheidend ist immer die tatsächliche Serverantwort: Ein Spiel kann je nach Version, Mod, Serveranbieter, Firewall oder deaktivierter Option keine Query- oder RCON-Antwort liefern.
 
 Der geschützte Endpoint `GET /api/adapters` liefert die im Build registrierten Adapter maschinenlesbar zurück.
+
+## 4NetPlayers CI
+
+Die Oberfläche bleibt bewusst im Darkmodus und verwendet die aus dem 4Players-Styleguide abgeleiteten Kernfarben Maire (#181817), 4P Red (#EB1B2E), Real White und Light Grey. Das horizontale 4NetPlayers-Logo wird als Webseitenlogo verwendet; das 4NetPlayers-Globe dient als Favicon.
+
+Die verwendeten, lokal ausgelieferten Assets liegen in [public/4netplayers-horizontal-white.svg](public/4netplayers-horizontal-white.svg) und [public/4np-globe-white.svg](public/4np-globe-white.svg). Das Docker-Image kopiert den public-Ordner automatisch mit und liefert die Assets über /assets/... aus.

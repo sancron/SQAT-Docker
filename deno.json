@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "start": "deno run --allow-net --allow-env src/server.ts",
+    "start": "deno run --allow-net --allow-env --allow-read=public src/server.ts",
     "check": "deno check src/server.ts",
     "fmt": "deno fmt src/server.ts src/adapters.ts"
   }
