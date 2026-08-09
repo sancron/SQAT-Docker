@@ -37,6 +37,8 @@ deno task check
 deno task start
 ```
 
+Für SCUM muss `SCUM_MASTER_SERVERS=13.244.99.178:405` gesetzt sein. Eine bereits vorhandene `.env` mit den früheren TCP/1040-Einträgen überschreibt den aktuellen Compose-Default und führt zum SCUMetrics-Fallback.
+
 ## Portainer
 
 1. `SUPPORT_PASSWORD` und optional `PORT` in einer `.env` bzw. in den Stack-Umgebungsvariablen setzen.

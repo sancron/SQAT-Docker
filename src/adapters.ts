@@ -914,11 +914,8 @@ async function queryScum(
   host: string,
   port: number,
 ): Promise<QueryResult> {
-  const cacheKey = `${host.replace(/^\\[|\\]$/g, "")}:${port}`;
-  const cached = scumMetricsCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return queryScumMetrics(host, port);
-  }
+  // The masterserver is authoritative for this adapter. SCUMetrics remains a
+  // fallback, but its cache must not bypass a fresh masterserver check.
   let masterMessage = "Keine Masterserver-Antwort";
   try {
     // Primär: eigener SCUM-Masterserver-Client.
