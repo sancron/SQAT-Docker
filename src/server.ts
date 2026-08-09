@@ -71,11 +71,18 @@ type QueryResult = {
 class ToolError extends Error {
   status: number;
   code: string;
-  constructor(message: string, code: string, status = 400) {
+  details: Record<string, unknown>;
+  constructor(
+    message: string,
+    code: string,
+    status = 400,
+    details: Record<string, unknown> = {},
+  ) {
     super(message);
     this.name = "ToolError";
     this.code = code;
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -740,7 +747,7 @@ async function queryServer(request: QueryRequest): Promise<QueryResult> {
   const probes = [
     ["A2S / Steam Query", () => queryA2s(request.host, request.port)],
     [
-      "SCUM Query (A2S / Masterserver)",
+      "SCUM Serverliste (Masterserver)",
       () => querySpecialAdapter("scum", request.host, request.port),
     ],
     ["Minecraft Java", () => queryMinecraftJava(request.host, request.port)],
@@ -777,6 +784,7 @@ async function queryServer(request: QueryRequest): Promise<QueryResult> {
     "Keines der automatischen Query-Protokolle hat eine verwertbare Antwort geliefert.",
     "no_supported_query",
     502,
+    { attempts },
   );
 }
 
@@ -853,7 +861,7 @@ function appScript(): string {
 }
 
 function appPage(): string {
-  return `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#181817"><link rel="icon" type="image/svg+xml" href="/assets/4np-globe-white.svg"><meta name="description" content="Universelles Support Query und RCON Tool"><title>Support Query Tool</title>${styles()}</head><body><main class="shell"><header class="topbar"><div class="brand-lockup"><img class="brand-logo" src="/assets/4netplayers-horizontal-white.svg" alt="4NetPlayers"><div><p class="eyebrow">Support Operations</p><h1>Server Diagnostic Console</h1></div></div><button id="logout" class="secondary">Abmelden</button></header><nav class="tabs" aria-label="Bereiche"><button class="active" data-tab="query">Server Query</button><button data-tab="rcon">RCON-Konsole</button></nav><section id="tab-query" class="panel tab active"><h2>Serverinformationen abrufen</h2><p class="muted">Wähle einen Adapter oder nutze „Automatisch“. Je nach Spiel werden alle Daten angezeigt, die das jeweilige Protokoll liefert.</p><form id="query-form" class="stack"><div class="form-grid three"><label>IP-Adresse / Hostname<input id="query-host" required placeholder="203.0.113.10 oder server.example"></label><label>Query-Port<input id="query-port" type="number" min="1" max="65535" value="27015" required></label><label>Query-Adapter<select id="query-transport"><option value="auto">Automatisch testen</option><option value="a2s">A2S / Steam Query (UDP)</option><option value="minecraft-java">Minecraft Java (TCP)</option><option value="minecraft-bedrock">Minecraft Bedrock / RakNet (UDP)</option><option value="satisfactory">Satisfactory Lightweight Query (UDP)</option><option value="fivem">FiveM HTTP Query</option><option value="palworld-rest">Palworld REST API (HTTP)</option><option value="scum">SCUM Query (A2S / Masterserver)</option></select></label></div><button id="query-submit" type="submit">Server abfragen</button></form><div id="query-result" class="result" aria-live="polite"></div></section><section id="tab-rcon" class="panel tab"><h2>RCON-Befehl senden</h2><p class="muted">Wähle das zum Spiel passende RCON-Protokoll. RCON muss serverseitig aktiviert und aus dem Netzwerk erreichbar sein; Passwörter werden nur für die laufende Anfrage verwendet.</p><form id="rcon-form" class="stack"><div class="form-grid three"><label>IP-Adresse / Hostname<input id="rcon-host" required placeholder="203.0.113.10"></label><label>RCON-Port<input id="rcon-port" type="number" min="1" max="65535" value="27015" required></label><label><span class="label-row">RCON-Adapter <span class="help-dot" tabindex="0" role="img" aria-label="Informationen zu RCON-Adaptern" data-tooltip="Source RCON (TCP): kompatible Spiele wie Path of Titans, Minecraft, Project Zomboid, Factorio und Eco. BattlEye RCON (UDP): Arma 3, DayZ und Arma Reforger. Rust WebRCON: WebSocket-RCON für Rust.">?</span></span><select id="rcon-protocol"><option value="source-rcon">Source RCON (TCP)</option><option value="battlEye-rcon">BattlEye RCON (UDP)</option><option value="rust-websocket">Rust WebRCON</option></select></label></div><label>RCON-Passwort<input id="rcon-password" type="password" autocomplete="off" required></label><label>Befehl<input id="rcon-command" type="text" maxlength="512" required placeholder="status"></label><button id="rcon-submit" type="submit">Befehl senden</button></form><div id="rcon-result" class="result" aria-live="polite"></div></section>${footerHtml()}</main><script>${appScript()}</script></body></html>`;
+  return `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#181817"><link rel="icon" type="image/svg+xml" href="/assets/4np-globe-white.svg"><meta name="description" content="Universelles Support Query und RCON Tool"><title>Support Query Tool</title>${styles()}</head><body><main class="shell"><header class="topbar"><div class="brand-lockup"><img class="brand-logo" src="/assets/4netplayers-horizontal-white.svg" alt="4NetPlayers"><div><p class="eyebrow">Support Operations</p><h1>Server Diagnostic Console</h1></div></div><button id="logout" class="secondary">Abmelden</button></header><nav class="tabs" aria-label="Bereiche"><button class="active" data-tab="query">Server Query</button><button data-tab="rcon">RCON-Konsole</button></nav><section id="tab-query" class="panel tab active"><h2>Serverinformationen abrufen</h2><p class="muted">Wähle einen Adapter oder nutze „Automatisch“. Je nach Spiel werden alle Daten angezeigt, die das jeweilige Protokoll liefert.</p><form id="query-form" class="stack"><div class="form-grid three"><label>IP-Adresse / Hostname<input id="query-host" required placeholder="203.0.113.10 oder server.example"></label><label>Query-Port<input id="query-port" type="number" min="1" max="65535" value="27015" required></label><label>Query-Adapter<select id="query-transport"><option value="auto">Automatisch testen</option><option value="a2s">A2S / Steam Query (UDP)</option><option value="minecraft-java">Minecraft Java (TCP)</option><option value="minecraft-bedrock">Minecraft Bedrock / RakNet (UDP)</option><option value="satisfactory">Satisfactory Lightweight Query (UDP)</option><option value="fivem">FiveM HTTP Query</option><option value="palworld-rest">Palworld REST API (HTTP)</option><option value="scum">SCUM Serverliste (Masterserver)</option></select></label></div><button id="query-submit" type="submit">Server abfragen</button></form><div id="query-result" class="result" aria-live="polite"></div></section><section id="tab-rcon" class="panel tab"><h2>RCON-Befehl senden</h2><p class="muted">Wähle das zum Spiel passende RCON-Protokoll. RCON muss serverseitig aktiviert und aus dem Netzwerk erreichbar sein; Passwörter werden nur für die laufende Anfrage verwendet.</p><form id="rcon-form" class="stack"><div class="form-grid three"><label>IP-Adresse / Hostname<input id="rcon-host" required placeholder="203.0.113.10"></label><label>RCON-Port<input id="rcon-port" type="number" min="1" max="65535" value="27015" required></label><label><span class="label-row">RCON-Adapter <span class="help-dot" tabindex="0" role="img" aria-label="Informationen zu RCON-Adaptern" data-tooltip="Source RCON (TCP): kompatible Spiele wie Path of Titans, Minecraft, Project Zomboid, Factorio und Eco. BattlEye RCON (UDP): Arma 3, DayZ und Arma Reforger. Rust WebRCON: WebSocket-RCON für Rust.">?</span></span><select id="rcon-protocol"><option value="source-rcon">Source RCON (TCP)</option><option value="battlEye-rcon">BattlEye RCON (UDP)</option><option value="rust-websocket">Rust WebRCON</option></select></label></div><label>RCON-Passwort<input id="rcon-password" type="password" autocomplete="off" required></label><label>Befehl<input id="rcon-command" type="text" maxlength="512" required placeholder="status"></label><button id="rcon-submit" type="submit">Befehl senden</button></form><div id="rcon-result" class="result" aria-live="polite"></div></section>${footerHtml()}</main><script>${appScript()}</script></body></html>`;
 }
 
 async function readJson(request: Request): Promise<unknown> {
@@ -1020,7 +1028,12 @@ async function serve(request: Request): Promise<Response> {
   } catch (error) {
     if (error instanceof ToolError || error instanceof AdapterError) {
       return json(
-        { online: false, message: error.message, code: error.code },
+        {
+          online: false,
+          message: error.message,
+          code: error.code,
+          ...(error instanceof ToolError ? error.details : {}),
+        },
         error.status,
       );
     }

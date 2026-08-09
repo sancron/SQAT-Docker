@@ -406,7 +406,7 @@ async function queryScumA2s(
     const fields = parseScumA2sInfo(response);
     return {
       online: true,
-      transport: "SCUM Query (A2S / Steam Query über UDP)",
+      transport: "SCUM Query (optionale A2S-Prüfung über UDP)",
       target: displayTarget(host, port),
       latencyMs: Math.round(performance.now() - started),
       message: "Der SCUM-Server antwortet.",
@@ -472,9 +472,7 @@ function parseScumA2sInfo(data: Uint8Array): Record<string, FieldValue> {
 }
 
 const DEFAULT_SCUM_MASTER_SERVERS: ReadonlyArray<[string, number]> = [
-  ["176.57.138.2", 1040],
-  ["83.223.199.20", 1040],
-  ["83.223.200.20", 1040],
+  ["13.244.99.178", 405],
 ];
 
 function scumMasterServers(): ReadonlyArray<[string, number]> {
@@ -482,7 +480,7 @@ function scumMasterServers(): ReadonlyArray<[string, number]> {
   if (!configured) return DEFAULT_SCUM_MASTER_SERVERS;
   const servers = configured.split(",").map((entry) => {
     const [host, portText] = entry.trim().split(":");
-    const port = Number.parseInt(portText ?? "1040", 10);
+    const port = Number.parseInt(portText ?? "405", 10);
     return host && Number.isInteger(port) && port >= 1 && port <= 65535
       ? [host, port] as [string, number]
       : undefined;
@@ -490,7 +488,11 @@ function scumMasterServers(): ReadonlyArray<[string, number]> {
   return servers.length > 0 ? servers : DEFAULT_SCUM_MASTER_SERVERS;
 }
 const SCUM_MASTER_TIMEOUT_MS = 5_000;
-const SCUM_MASTER_RECORD_SIZE = 127;
+const SCUM_MASTER_RESPONSE_HEADER_SIZE = 4;
+const SCUM_MASTER_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const SCUM_MASTER_RECORD_HEADER_SIZE = 30;
+const SCUM_MASTER_RECORD_PREFIX_SIZE = 23;
+const SCUM_MASTER_RECORD_TRAILER = Uint8Array.from([0xef, 0xbe]);
 
 type ScumMasterRecord = {
   ip: string;
@@ -498,8 +500,6 @@ type ScumMasterRecord = {
   name: string;
   players: number;
   maxPlayers: number;
-  password: boolean;
-  version: string;
 };
 
 async function writeScumTcp(
@@ -536,46 +536,50 @@ async function readScumTcp(
 
 function parseScumMasterRecords(data: Uint8Array): ScumMasterRecord[] {
   const records: ScumMasterRecord[] = [];
-  for (
-    let offset = 0;
-    offset + SCUM_MASTER_RECORD_SIZE <= data.length;
-    offset += SCUM_MASTER_RECORD_SIZE
-  ) {
-    const versionBytes = Array.from(
-      data.subarray(offset + 119, offset + 127),
-    ).reverse();
-    const version = [
-      versionBytes[0],
-      versionBytes[1],
-      Number.parseInt(
-        versionBytes.slice(2, 4).map((value) =>
-          value.toString(16).padStart(2, "0")
-        ).join(""),
-        16,
-      ),
-      Number.parseInt(
-        versionBytes.slice(4).map((value) =>
-          value.toString(16).padStart(2, "0")
-        ).join(""),
-        16,
-      ),
-    ].join(".");
+  let offset = 0;
+  while (offset < data.length) {
+    if (data.length - offset < SCUM_MASTER_RECORD_HEADER_SIZE) {
+      throw new Error("Unvollständiger SCUM-Masterserver-Datensatz.");
+    }
+    const nameLength = data[offset + SCUM_MASTER_RECORD_PREFIX_SIZE + 6];
+    const nameStart = offset + SCUM_MASTER_RECORD_HEADER_SIZE;
+    const nameEnd = nameStart + nameLength;
+    if (nameEnd + SCUM_MASTER_RECORD_TRAILER.length > data.length) {
+      throw new Error("Unvollständige SCUM-Serverbezeichnung.");
+    }
+
+    // The current client response uses a six-byte, version-dependent status
+    // marker before the name. Its framing is the length byte plus EF BE;
+    // older captures contain an optional NUL immediately before EF BE.
+    const trailerStart = data[nameEnd] === 0 ? nameEnd + 1 : nameEnd;
+    if (
+      trailerStart + SCUM_MASTER_RECORD_TRAILER.length > data.length ||
+      data[trailerStart] !== SCUM_MASTER_RECORD_TRAILER[0] ||
+      data[trailerStart + 1] !== SCUM_MASTER_RECORD_TRAILER[1]
+    ) {
+      throw new Error("Ungültiger SCUM-Masterserver-Datensatzabschluss.");
+    }
+
     records.push({
+      // SCUM stores IPv4 octets in reverse order and the port as uint16 LE.
       ip: [data[offset + 3], data[offset + 2], data[offset + 1], data[offset]]
         .join("."),
       port: data[offset + 4] | data[offset + 5] << 8,
-      name: decoder.decode(data.subarray(offset + 6, offset + 106)).replace(
-        /\0+$/g,
-        "",
-      ).trim(),
-      players: data[offset + 107],
-      maxPlayers: data[offset + 108],
-      password: ((data[offset + 111] >> 1) & 1) === 1,
-      version,
+      // The current variable record keeps player count and capacity directly
+      // after the 0xDEAD marker.
+      players: data[offset + 9],
+      maxPlayers: data[offset + 10],
+      name: decoder.decode(data.subarray(nameStart, nameEnd)).trim(),
     });
+    offset = trailerStart + SCUM_MASTER_RECORD_TRAILER.length;
   }
   return records;
 }
+
+// SCUMs eigener Masterserver-Client verwendet dieses binäre Serverlisten-Kommando.
+// Es ist kein A2S-Paket und benötigt weder Steam-Login noch einen Spielnamen.
+const SCUM_MASTER_QUERY = Uint8Array.from([0x4c, 0x53, 0x54, 0x00, 0x00]);
+const SCUM_MASTER_MAX_RECORDS = 20_000;
 
 async function queryScumMaster(
   host: string,
@@ -586,13 +590,22 @@ async function queryScumMaster(
     SCUM_MASTER_TIMEOUT_MS,
   );
   try {
-    await writeScumTcp(conn, Uint8Array.from([0x04, 0x03, 0x00, 0x00]));
-    const header = await readScumTcp(conn, 2);
-    const count = header[0] | header[1] << 8;
-    if (count > 100_000) throw new Error("Ungültige SCUM-Serveranzahl.");
-    return parseScumMasterRecords(
-      await readScumTcp(conn, count * SCUM_MASTER_RECORD_SIZE),
-    );
+    await writeScumTcp(conn, SCUM_MASTER_QUERY);
+    const header = await readScumTcp(conn, SCUM_MASTER_RESPONSE_HEADER_SIZE);
+    const responseLength = readUInt32LE(header, 0);
+    if (responseLength > SCUM_MASTER_MAX_RESPONSE_BYTES) {
+      throw new Error(
+        `Ungültige SCUM-Masterantwort: ${responseLength} Bytes (Maximum ${SCUM_MASTER_MAX_RESPONSE_BYTES}).`,
+      );
+    }
+    const payload = await readScumTcp(conn, responseLength);
+    const records = parseScumMasterRecords(payload);
+    if (records.length > SCUM_MASTER_MAX_RECORDS) {
+      throw new Error(
+        `Ungültige SCUM-Serveranzahl: ${records.length} (Maximum ${SCUM_MASTER_MAX_RECORDS}).`,
+      );
+    }
+    return records;
   } finally {
     conn.close();
   }
@@ -619,8 +632,9 @@ async function queryScumViaMaster(
   const targetIp = await resolveScumIp(host);
   const candidatePorts = new Set([
     port,
-    port + 2,
     port + 1,
+    port + 2,
+    port + 3,
     port - 1,
     port - 2,
     port - 3,
@@ -651,7 +665,7 @@ async function queryScumViaMaster(
   if (!record) {
     throw new AdapterError(
       errors.length === scumMasterServers().length
-        ? "Keine Antwort von den konfigurierten SCUM-Masterservern."
+        ? "Keine Antwort von den konfigurierten SCUM-Masterservern. SCUM stellt kein verlässliches direktes Query-Interface bereit; der Status wird über die Masterserverliste ermittelt."
         : errors.length > 0 && matches.length === 0
         ? "SCUM-Masterserver antworten, enthalten diese Ziel-IP aber nicht."
         : unique.length > 1
@@ -671,8 +685,6 @@ async function queryScumViaMaster(
       "Servername": record.name,
       "Spieler": record.players,
       "Maximale Spieler": record.maxPlayers,
-      "Version": record.version,
-      "Passwort geschützt": record.password,
       "Gemeldeter SCUM-Port": record.port,
       "SCUM-IP": record.ip,
     },
@@ -681,6 +693,185 @@ async function queryScumViaMaster(
       "; der eingegebene Port war " + port + ".",
     ],
   };
+}
+type ScumMetricsCacheEntry = {
+  etag?: string;
+  result: QueryResult;
+  expiresAt: number;
+};
+
+const SCUMMETRICS_API_BASE = Deno.env.get("SCUMMETRICS_API_BASE_URL")?.trim() ||
+  "https://scummetrics.com/api/v1/servers";
+const SCUMMETRICS_TIMEOUT_MS = 5_000;
+const SCUMMETRICS_MIN_INTERVAL_MS = 500;
+const scumMetricsCache = new Map<string, ScumMetricsCacheEntry>();
+let scumMetricsNextRequestAt = 0;
+
+async function waitForScumMetricsSlot(): Promise<void> {
+  const now = Date.now();
+  const waitMs = Math.max(0, scumMetricsNextRequestAt - now);
+  scumMetricsNextRequestAt = Math.max(now, scumMetricsNextRequestAt) +
+    SCUMMETRICS_MIN_INTERVAL_MS;
+  if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+}
+
+function scumMetricsErrorMessage(body: unknown, fallback: string): string {
+  if (!body || typeof body !== "object") return fallback;
+  const error = (body as Record<string, unknown>).error;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const message = (error as Record<string, unknown>).message;
+    if (typeof message === "string") return message;
+  }
+  return fallback;
+}
+
+async function queryScumMetrics(
+  host: string,
+  port: number,
+): Promise<QueryResult> {
+  const started = performance.now();
+  const target = `${host.replace(/^\\[|\\]$/g, "")}:${port}`;
+  const cached = scumMetricsCache.get(target);
+  if (cached && cached.expiresAt > Date.now()) {
+    return {
+      ...cached.result,
+      latencyMs: Math.round(performance.now() - started),
+      message: "Der SCUM-Server antwortet über SCUMetrics (Cache).",
+    };
+  }
+  await waitForScumMetricsSlot();
+  const headers = new Headers({ accept: "application/json" });
+  if (cached?.etag) headers.set("if-none-match", cached.etag);
+  const url = `${SCUMMETRICS_API_BASE}/${encodeURIComponent(target)}`;
+  let response: Response;
+  try {
+    response = await timeout(fetch(url, { headers }), SCUMMETRICS_TIMEOUT_MS);
+  } catch (error) {
+    throw new AdapterError(
+      `SCUMetrics ist nicht erreichbar: ${
+        error instanceof Error ? error.message : "Netzwerkfehler"
+      }`,
+      "scum_metrics_unavailable",
+    );
+  }
+  if (response.status === 304 && cached) {
+    const refreshed = {
+      ...cached,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+    };
+    scumMetricsCache.set(target, refreshed);
+    return {
+      ...cached.result,
+      latencyMs: Math.round(performance.now() - started),
+      message: "Der SCUM-Server antwortet über SCUMetrics (unverändert).",
+    };
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    body = undefined;
+  }
+  if (response.status === 429) {
+    const retryAfter = response.headers.get("retry-after") ?? "unbekannt";
+    throw new AdapterError(
+      `SCUMetrics Rate-Limit erreicht; erneut versuchen nach ${retryAfter} Sekunden.`,
+      "scum_metrics_rate_limited",
+      429,
+    );
+  }
+  if (!response.ok) {
+    throw new AdapterError(
+      `SCUMetrics: ${scumMetricsErrorMessage(body, `HTTP ${response.status}`)}`,
+      response.status === 404 ? "scum_metrics_not_found" : "scum_metrics_error",
+      response.status === 404 ? 404 : 502,
+    );
+  }
+  const data = body && typeof body === "object"
+    ? (body as Record<string, unknown>).data
+    : undefined;
+  if (!data || typeof data !== "object") {
+    throw new AdapterError(
+      "SCUMetrics lieferte keine gültigen Serverdaten.",
+      "scum_metrics_invalid_response",
+    );
+  }
+  const server = data as Record<string, unknown>;
+  const address = server.address && typeof server.address === "object"
+    ? server.address as Record<string, unknown>
+    : {};
+  const players = server.players && typeof server.players === "object"
+    ? server.players as Record<string, unknown>
+    : {};
+  const location = server.location && typeof server.location === "object"
+    ? server.location as Record<string, unknown>
+    : {};
+  const ranks = server.ranks && typeof server.ranks === "object"
+    ? server.ranks as Record<string, unknown>
+    : {};
+  const status = server.status === "online";
+  const result: QueryResult = {
+    online: status,
+    transport: "SCUMetrics API (Masterserver-Daten)",
+    target: displayTarget(host, port),
+    latencyMs: Math.round(performance.now() - started),
+    message: status
+      ? "Der SCUM-Server antwortet über SCUMetrics."
+      : "SCUMetrics kennt den Server, meldet ihn aber nicht als online.",
+    fields: {
+      "Servername": server.name as FieldValue,
+      "Spieler": players.current as FieldValue,
+      "Maximale Spieler": players.max as FieldValue,
+      "Version": server.version as FieldValue,
+      "Build": server.build as FieldValue,
+      "Spielmodus": server.mode as FieldValue,
+      "Land": location.country as FieldValue,
+      "Region": location.region as FieldValue,
+      "Ingame-Zeit": server.ingame_time as FieldValue,
+      "TPS": server.tps as FieldValue,
+      "Durchschnitt Spieler (72h)": server.avg_players_72h as FieldValue,
+      "Uptime (7 Tage)": server.uptime && typeof server.uptime === "object"
+        ? (server.uptime as Record<string, unknown>)["7d"] as FieldValue
+        : undefined,
+      "Uptime (30 Tage)": server.uptime && typeof server.uptime === "object"
+        ? (server.uptime as Record<string, unknown>)["30d"] as FieldValue
+        : undefined,
+      "DACH-Rang": ranks.dach && typeof ranks.dach === "object"
+        ? `${(ranks.dach as Record<string, unknown>).rank ?? "-"} / ${
+          (ranks.dach as Record<string, unknown>).of ?? "-"
+        }`
+        : undefined,
+      "Weltrang": ranks.world && typeof ranks.world === "object"
+        ? `${(ranks.world as Record<string, unknown>).rank ?? "-"} / ${
+          (ranks.world as Record<string, unknown>).of ?? "-"
+        }`
+        : undefined,
+      "SCUM-IP": address.ip as FieldValue,
+      "Gemeldeter SCUM-Port": address.port as FieldValue,
+      "SCUMetrics-ID": server.id as FieldValue,
+      "Letzte Aktualisierung": (body as Record<string, unknown>).meta &&
+          typeof (body as Record<string, unknown>).meta === "object"
+        ? ((body as Record<string, unknown>).meta as Record<string, unknown>)
+          .collected_at as FieldValue
+        : undefined,
+    },
+  };
+  const meta = body && typeof body === "object"
+    ? (body as Record<string, unknown>).meta
+    : undefined;
+  const nextUpdate = meta && typeof meta === "object"
+    ? (meta as Record<string, unknown>).next_update_at
+    : undefined;
+  const expiresAt = typeof nextUpdate === "string"
+    ? Math.max(Date.now() + 30_000, Date.parse(nextUpdate))
+    : Date.now() + 5 * 60 * 1000;
+  scumMetricsCache.set(target, {
+    etag: response.headers.get("etag") ?? undefined,
+    result,
+    expiresAt,
+  });
+  return result;
 }
 async function queryScumDirect(
   host: string,
@@ -696,19 +887,22 @@ async function queryScumDirect(
       port - 3,
     ].filter((candidate) => candidate >= 1 && candidate <= 65535)),
   ];
-  for (const candidate of candidates) {
-    try {
-      const result = await queryScumA2s(host, candidate);
-      if (candidate !== port) {
-        result.warnings = [
-          "SCUM hat auf dem eingegebenen Port nicht geantwortet; " +
-          "die direkte A2S-Antwort wurde auf Port " + candidate + " empfangen.",
-        ];
-      }
-      return result;
-    } catch {
-      // Try the next SCUM port variant.
-    }
+  try {
+    return await Promise.any(
+      candidates.map(async (candidate) => {
+        const result = await queryScumA2s(host, candidate);
+        if (candidate !== port) {
+          result.warnings = [
+            "SCUM hat auf dem eingegebenen Port nicht geantwortet; " +
+            "die direkte A2S-Antwort wurde auf Port " + candidate +
+            " empfangen.",
+          ];
+        }
+        return result;
+      }),
+    );
+  } catch {
+    // All direct SCUM port variants failed.
   }
   throw new AdapterError(
     "Keine direkte SCUM-A2S-Antwort auf den geprüften Portvarianten.",
@@ -720,26 +914,42 @@ async function queryScum(
   host: string,
   port: number,
 ): Promise<QueryResult> {
-  const directPromise = queryScumDirect(host, port);
-  const masterPromise = queryScumViaMaster(host, port);
+  const cacheKey = `${host.replace(/^\\[|\\]$/g, "")}:${port}`;
+  const cached = scumMetricsCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return queryScumMetrics(host, port);
+  }
+  let masterMessage = "Keine Masterserver-Antwort";
   try {
-    return await Promise.any([directPromise, masterPromise]);
-  } catch {
-    const [direct, master] = await Promise.allSettled([
-      directPromise,
-      masterPromise,
-    ]);
-    const directMessage = direct.status === "rejected" &&
-        direct.reason instanceof Error
-      ? direct.reason.message
-      : "Keine direkte Antwort";
-    const masterMessage = master.status === "rejected" &&
-        master.reason instanceof Error
-      ? master.reason.message
+    // Primär: eigener SCUM-Masterserver-Client.
+    return await queryScumViaMaster(host, port);
+  } catch (error) {
+    masterMessage = error instanceof Error
+      ? error.message
       : "Keine Masterserver-Antwort";
+  }
+
+  let directMessage = "Keine direkte Antwort";
+  try {
+    // Fallback: einzelne Server-Query, falls der Server A2S anbietet.
+    return await queryScumDirect(host, port);
+  } catch (error) {
+    directMessage = error instanceof Error
+      ? error.message
+      : "Keine direkte Antwort";
+  }
+
+  try {
+    // Letzter Fallback: externe, read-only SCUMetrics-Datenquelle.
+    return await queryScumMetrics(host, port);
+  } catch (metricsError) {
+    const metricsMessage = metricsError instanceof Error
+      ? metricsError.message
+      : "Keine SCUMetrics-Antwort";
     throw new AdapterError(
-      "SCUM nicht erreichbar. Direkte Abfrage: " + directMessage +
-        " Masterserver: " + masterMessage,
+      "SCUM nicht erreichbar. Masterserver: " + masterMessage +
+        " Direkte Abfrage: " + directMessage +
+        " SCUMetrics-Fallback: " + metricsMessage,
       "scum_unavailable",
     );
   }
@@ -1062,10 +1272,10 @@ export const queryAdapterInfo = [
   {
     id: "scum",
     name: "SCUM Query",
-    transport: "UDP / TCP",
+    transport: "TCP (Masterserver), optional UDP",
     status: "built-in",
     games:
-      "SCUM Dedicated Server über SCUM-Masterserver und ergänzende direkte A2S-Abfrage",
+      "SCUM Dedicated Server über die SCUM-Masterserverliste; direkte A2S-Prüfung nur als optionaler Fallback",
   },
 ];
 export const rconAdapterInfo = [
