@@ -10,7 +10,7 @@ Universelles, passwortgeschütztes Deno-Webtool zur technischen Prüfung von Gam
 - Satisfactory Lightweight Query über UDP
 - FiveM öffentliche HTTP-Status-Endpunkte (`info.json`, `players.json`, `dynamic.json`)
 - Palworld REST API Info-Endpunkt
-- SCUM-A2S-/Steam-Query über UDP mit automatischer Prüfung typischer Portvarianten
+- SCUM-A2S-/Steam-Query über UDP plus SCUM-Masterserver-Fallback
 - Source-RCON-kompatibles TCP-RCON für kompatible Spiele
 - BattlEye/Bohemia RCon über UDP für Arma 3, DayZ und Arma Reforger
 - Rust WebRCON über WebSocket

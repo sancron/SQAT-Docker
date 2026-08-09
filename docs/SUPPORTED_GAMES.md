@@ -16,7 +16,7 @@ Das Tool entscheidet nicht anhand des Spielnamens, sondern anhand einer echten P
 | Satisfactory Lightweight Query | UDP | eingebaut | Satisfactory; liefert primär Status-/Versionsdaten, keine standardisierten Spielerlisten. |
 | FiveM HTTP Query | HTTP | eingebaut | FiveM mit erreichbaren `info.json`, `players.json` und/oder `dynamic.json`-Endpunkten. |
 | Palworld REST API | HTTP | eingebaut | Palworld Dedicated Server mit aktivierter REST API; der Info-Endpunkt ist `/v1/api/info`. |
-| SCUM Query | UDP | eingebaut | SCUM Dedicated Server über A2S / Steam Query; prüft den eingegebenen Port sowie typische SCUM-Abweichungen (`+1`, `+2`, `-2`). |
+| SCUM Query | UDP / TCP | eingebaut | Direkte A2S-Abfrage plus SCUM-Masterserver-Fallback; liefert unter anderem Servername, Version, Spielerzahl und gemeldeten Port. |
 
 ### A2S-Hinweise
 
@@ -29,7 +29,7 @@ Bei Path of Titans muss die Source-Query-Funktion serverseitig aktiviert sein; l
 - Satisfactory nutzt ein eigenes Lightweight-Query-UDP-Format. Das Tool wertet Magic, Antworttyp, Version, Cookie, Serverzustand, NetCL, Flags und Teilzustände aus.
 - FiveM liefert Statusdaten typischerweise über HTTP-JSON-Endpunkte. Diese Endpunkte können deaktiviert oder geschützt sein.
 - Palworld nutzt für Serverinformationen die offizielle REST API. Die REST API muss aktiviert und ihr Port erreichbar sein. Zugangsdaten werden in diesem reinen Info-Adapter nicht automatisch erraten oder gespeichert.
-- SCUM nutzt für den Serverbrowser einen A2S-/Steam-Query-Endpunkt. Der Adapter führt den Challenge-Handshake auf demselben UDP-Socket aus und prüft neben dem eingegebenen Port typische SCUM-Portvarianten. Bei einem Gameport von 7780 ist 7782 die übliche Query-Port-Kandidatur.
+- SCUM registriert Server über die SCUM-Masterserver. Der Adapter versucht direkte A2S-/Steam-Query-Ports und fragt parallel die SCUM-Masterserver ab. Dabei werden die eingegebene Portnummer sowie typische Nachbarports abgeglichen. Dadurch kann ein Server auch dann erkannt werden, wenn SCUM selbst keinen direkten A2S-Endpunkt bereitstellt. Bei der 4NetPlayers-Zuordnung aus dem Test sind `7777` (Panel-IP/Port) und `7780` (zusätzlicher Gameport) beide relevante Kandidaten.
 
 ## RCON-Adapter
 

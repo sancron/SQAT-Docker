@@ -471,7 +471,196 @@ function parseScumA2sInfo(data: Uint8Array): Record<string, FieldValue> {
   };
 }
 
-async function queryScum(
+const SCUM_MASTER_SERVERS: ReadonlyArray<[string, number]> = [
+  ["176.57.138.2", 1040],
+  ["172.107.16.215", 1040],
+  ["206.189.248.133", 1040],
+];
+const SCUM_MASTER_TIMEOUT_MS = 5_000;
+const SCUM_MASTER_RECORD_SIZE = 127;
+
+type ScumMasterRecord = {
+  ip: string;
+  port: number;
+  name: string;
+  players: number;
+  maxPlayers: number;
+  password: boolean;
+  version: string;
+};
+
+async function writeScumTcp(
+  conn: Deno.Conn,
+  data: Uint8Array,
+): Promise<void> {
+  let offset = 0;
+  while (offset < data.length) {
+    offset += await timeout(
+      conn.write(data.subarray(offset)),
+      SCUM_MASTER_TIMEOUT_MS,
+    );
+  }
+}
+
+async function readScumTcp(
+  conn: Deno.Conn,
+  length: number,
+): Promise<Uint8Array> {
+  const data = new Uint8Array(length);
+  let offset = 0;
+  while (offset < length) {
+    const read = await timeout(
+      conn.read(data.subarray(offset)),
+      SCUM_MASTER_TIMEOUT_MS,
+    );
+    if (read === null) {
+      throw new Error("SCUM-Masterserver hat die Verbindung beendet.");
+    }
+    offset += read;
+  }
+  return data;
+}
+
+function parseScumMasterRecords(data: Uint8Array): ScumMasterRecord[] {
+  const records: ScumMasterRecord[] = [];
+  for (
+    let offset = 0;
+    offset + SCUM_MASTER_RECORD_SIZE <= data.length;
+    offset += SCUM_MASTER_RECORD_SIZE
+  ) {
+    const versionBytes = Array.from(
+      data.subarray(offset + 119, offset + 127),
+    ).reverse();
+    const version = [
+      versionBytes[0],
+      versionBytes[1],
+      Number.parseInt(
+        versionBytes.slice(2, 4).map((value) =>
+          value.toString(16).padStart(2, "0")
+        ).join(""),
+        16,
+      ),
+      Number.parseInt(
+        versionBytes.slice(4).map((value) =>
+          value.toString(16).padStart(2, "0")
+        ).join(""),
+        16,
+      ),
+    ].join(".");
+    records.push({
+      ip: [data[offset + 3], data[offset + 2], data[offset + 1], data[offset]]
+        .join("."),
+      port: data[offset + 4] | data[offset + 5] << 8,
+      name: decoder.decode(data.subarray(offset + 6, offset + 106)).replace(
+        /\0+$/g,
+        "",
+      ).trim(),
+      players: data[offset + 107],
+      maxPlayers: data[offset + 108],
+      password: ((data[offset + 111] >> 1) & 1) === 1,
+      version,
+    });
+  }
+  return records;
+}
+
+async function queryScumMaster(
+  host: string,
+  port: number,
+): Promise<ScumMasterRecord[]> {
+  const conn = await timeout(
+    Deno.connect({ hostname: host, port }),
+    SCUM_MASTER_TIMEOUT_MS,
+  );
+  try {
+    await writeScumTcp(conn, Uint8Array.from([0x04, 0x03, 0x00, 0x00]));
+    const header = await readScumTcp(conn, 2);
+    const count = header[0] | header[1] << 8;
+    if (count > 100_000) throw new Error("Ungültige SCUM-Serveranzahl.");
+    return parseScumMasterRecords(
+      await readScumTcp(conn, count * SCUM_MASTER_RECORD_SIZE),
+    );
+  } finally {
+    conn.close();
+  }
+}
+
+async function resolveScumIp(host: string): Promise<string> {
+  const normalized = host.replace(/^\[|\]$/g, "");
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalized)) return normalized;
+  const addresses = await timeout(
+    Deno.resolveDns(normalized, "A"),
+    SCUM_MASTER_TIMEOUT_MS,
+  );
+  if (!addresses[0]) {
+    throw new Error("Keine IPv4-Adresse für den SCUM-Host gefunden.");
+  }
+  return addresses[0];
+}
+
+async function queryScumViaMaster(
+  host: string,
+  port: number,
+): Promise<QueryResult> {
+  const started = performance.now();
+  const targetIp = await resolveScumIp(host);
+  const candidatePorts = new Set([
+    port,
+    port + 2,
+    port + 1,
+    port - 1,
+    port - 2,
+    port - 3,
+  ].filter((candidate) => candidate >= 1 && candidate <= 65535));
+  const matches: ScumMasterRecord[] = [];
+  const errors: string[] = [];
+  for (const [masterHost, masterPort] of SCUM_MASTER_SERVERS) {
+    try {
+      const records = await queryScumMaster(masterHost, masterPort);
+      matches.push(...records.filter((record) => record.ip === targetIp));
+      if (matches.some((record) => candidatePorts.has(record.port))) break;
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : "Netzwerkfehler");
+    }
+  }
+  const unique = [
+    ...new Map(matches.map((record) => [record.port, record])).values(),
+  ];
+  const record = unique.find((item) => candidatePorts.has(item.port)) ??
+    (unique.length === 1 ? unique[0] : undefined);
+  if (!record) {
+    throw new AdapterError(
+      errors.length > 0
+        ? "SCUM-Masterserver sind aus der Tool-Umgebung nicht erreichbar."
+        : unique.length > 1
+        ? "SCUM-Server gefunden, aber mehrere Ports gemeldet: " +
+          unique.map((item) => item.port).join(", ") + "."
+        : "Der SCUM-Server wurde noch nicht in der SCUM-Serverliste registriert.",
+      "scum_master_unavailable",
+    );
+  }
+  return {
+    online: true,
+    transport: "SCUM Query (Masterserver)",
+    target: displayTarget(host, port),
+    latencyMs: Math.round(performance.now() - started),
+    message: "Der SCUM-Server antwortet über die SCUM-Serverliste.",
+    fields: {
+      "Servername": record.name,
+      "Spieler": record.players,
+      "Maximale Spieler": record.maxPlayers,
+      "Version": record.version,
+      "Passwort geschützt": record.password,
+      "Gemeldeter SCUM-Port": record.port,
+      "SCUM-IP": record.ip,
+    },
+    warnings: record.port === port ? undefined : [
+      "Der SCUM-Masterserver meldet den Server unter Port " + record.port +
+      "; der eingegebene Port war " + port + ".",
+    ],
+  };
+}
+async function queryScumDirect(
   host: string,
   port: number,
 ): Promise<QueryResult> {
@@ -480,7 +669,9 @@ async function queryScum(
       port,
       port + 2,
       port + 1,
+      port - 1,
       port - 2,
+      port - 3,
     ].filter((candidate) => candidate >= 1 && candidate <= 65535)),
   ];
   for (const candidate of candidates) {
@@ -489,7 +680,7 @@ async function queryScum(
       if (candidate !== port) {
         result.warnings = [
           "SCUM hat auf dem eingegebenen Port nicht geantwortet; " +
-          "die A2S-Antwort wurde auf Port " + candidate + " empfangen.",
+          "die direkte A2S-Antwort wurde auf Port " + candidate + " empfangen.",
         ];
       }
       return result;
@@ -498,11 +689,38 @@ async function queryScum(
     }
   }
   throw new AdapterError(
-    "Keine direkte SCUM-A2S-Antwort. Geprüfte Ports: " +
-      candidates.join(", ") + ". Prüfe beim Hoster, ob der Query-Port als " +
-      "UDP-Port freigeschaltet ist und ob er dem Spielport +1 oder +2 entspricht.",
+    "Keine direkte SCUM-A2S-Antwort auf den geprüften Portvarianten.",
     "scum_a2s_unavailable",
   );
+}
+
+async function queryScum(
+  host: string,
+  port: number,
+): Promise<QueryResult> {
+  const directPromise = queryScumDirect(host, port);
+  const masterPromise = queryScumViaMaster(host, port);
+  try {
+    return await Promise.any([directPromise, masterPromise]);
+  } catch {
+    const [direct, master] = await Promise.allSettled([
+      directPromise,
+      masterPromise,
+    ]);
+    const directMessage = direct.status === "rejected" &&
+        direct.reason instanceof Error
+      ? direct.reason.message
+      : "Keine direkte Antwort";
+    const masterMessage = master.status === "rejected" &&
+        master.reason instanceof Error
+      ? master.reason.message
+      : "Keine Masterserver-Antwort";
+    throw new AdapterError(
+      "SCUM nicht erreichbar. Direkte Abfrage: " + directMessage +
+        " Masterserver: " + masterMessage,
+      "scum_unavailable",
+    );
+  }
 }
 export async function querySpecial(
   protocol: Exclude<
@@ -822,10 +1040,10 @@ export const queryAdapterInfo = [
   {
     id: "scum",
     name: "SCUM Query",
-    transport: "UDP",
+    transport: "UDP / TCP",
     status: "built-in",
     games:
-      "SCUM Dedicated Server über A2S / Steam Query; prüft zusätzlich typische SCUM-Ports",
+      "SCUM Dedicated Server über direkte A2S-Abfrage und SCUM-Masterserver",
   },
 ];
 export const rconAdapterInfo = [
