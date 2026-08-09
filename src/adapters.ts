@@ -471,11 +471,24 @@ function parseScumA2sInfo(data: Uint8Array): Record<string, FieldValue> {
   };
 }
 
-const SCUM_MASTER_SERVERS: ReadonlyArray<[string, number]> = [
+const DEFAULT_SCUM_MASTER_SERVERS: ReadonlyArray<[string, number]> = [
   ["176.57.138.2", 1040],
-  ["172.107.16.215", 1040],
-  ["206.189.248.133", 1040],
+  ["83.223.199.20", 1040],
+  ["83.223.200.20", 1040],
 ];
+
+function scumMasterServers(): ReadonlyArray<[string, number]> {
+  const configured = Deno.env.get("SCUM_MASTER_SERVERS")?.trim();
+  if (!configured) return DEFAULT_SCUM_MASTER_SERVERS;
+  const servers = configured.split(",").map((entry) => {
+    const [host, portText] = entry.trim().split(":");
+    const port = Number.parseInt(portText ?? "1040", 10);
+    return host && Number.isInteger(port) && port >= 1 && port <= 65535
+      ? [host, port] as [string, number]
+      : undefined;
+  }).filter((server): server is [string, number] => server !== undefined);
+  return servers.length > 0 ? servers : DEFAULT_SCUM_MASTER_SERVERS;
+}
 const SCUM_MASTER_TIMEOUT_MS = 5_000;
 const SCUM_MASTER_RECORD_SIZE = 127;
 
@@ -614,13 +627,20 @@ async function queryScumViaMaster(
   ].filter((candidate) => candidate >= 1 && candidate <= 65535));
   const matches: ScumMasterRecord[] = [];
   const errors: string[] = [];
-  for (const [masterHost, masterPort] of SCUM_MASTER_SERVERS) {
-    try {
-      const records = await queryScumMaster(masterHost, masterPort);
-      matches.push(...records.filter((record) => record.ip === targetIp));
-      if (matches.some((record) => candidatePorts.has(record.port))) break;
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : "Netzwerkfehler");
+  const masterResults = await Promise.allSettled(
+    scumMasterServers().map(([masterHost, masterPort]) =>
+      queryScumMaster(masterHost, masterPort)
+    ),
+  );
+  for (const result of masterResults) {
+    if (result.status === "fulfilled") {
+      matches.push(...result.value.filter((record) => record.ip === targetIp));
+    } else {
+      errors.push(
+        result.reason instanceof Error
+          ? result.reason.message
+          : "Netzwerkfehler",
+      );
     }
   }
   const unique = [
@@ -630,8 +650,10 @@ async function queryScumViaMaster(
     (unique.length === 1 ? unique[0] : undefined);
   if (!record) {
     throw new AdapterError(
-      errors.length > 0
-        ? "SCUM-Masterserver sind aus der Tool-Umgebung nicht erreichbar."
+      errors.length === scumMasterServers().length
+        ? "Keine Antwort von den konfigurierten SCUM-Masterservern."
+        : errors.length > 0 && matches.length === 0
+        ? "SCUM-Masterserver antworten, enthalten diese Ziel-IP aber nicht."
         : unique.length > 1
         ? "SCUM-Server gefunden, aber mehrere Ports gemeldet: " +
           unique.map((item) => item.port).join(", ") + "."
@@ -1043,7 +1065,7 @@ export const queryAdapterInfo = [
     transport: "UDP / TCP",
     status: "built-in",
     games:
-      "SCUM Dedicated Server über direkte A2S-Abfrage und SCUM-Masterserver",
+      "SCUM Dedicated Server über SCUM-Masterserver und ergänzende direkte A2S-Abfrage",
   },
 ];
 export const rconAdapterInfo = [

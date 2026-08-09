@@ -11,6 +11,7 @@ services:
       SUPPORT_PASSWORD: "${SUPPORT_PASSWORD:?SUPPORT_PASSWORD muss in .env gesetzt werden}"
       COOKIE_SECURE: "${COOKIE_SECURE:-false}"
       FOOTER_NOTICE: "${FOOTER_NOTICE:-Entwickelt von Daniel Soro (Kundensupport bei 4NetPlayers) mit Unterstützung von KI zur Erleichterung seiner Supportarbeit. Privat unter lynxnode.it betrieben; kein offizielles Angebot von 4NetPlayers.}"
+      SCUM_MASTER_SERVERS: "${SCUM_MASTER_SERVERS:-176.57.138.2:1040,83.223.199.20:1040,83.223.200.20:1040}"
     ports:
       - "${PORT:-8080}:8080"
     read_only: true

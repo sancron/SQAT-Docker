@@ -16,7 +16,7 @@ Das Tool entscheidet nicht anhand des Spielnamens, sondern anhand einer echten P
 | Satisfactory Lightweight Query | UDP | eingebaut | Satisfactory; liefert primär Status-/Versionsdaten, keine standardisierten Spielerlisten. |
 | FiveM HTTP Query | HTTP | eingebaut | FiveM mit erreichbaren `info.json`, `players.json` und/oder `dynamic.json`-Endpunkten. |
 | Palworld REST API | HTTP | eingebaut | Palworld Dedicated Server mit aktivierter REST API; der Info-Endpunkt ist `/v1/api/info`. |
-| SCUM Query | UDP / TCP | eingebaut | Direkte A2S-Abfrage plus SCUM-Masterserver-Fallback; liefert unter anderem Servername, Version, Spielerzahl und gemeldeten Port. |
+| SCUM Query | TCP (Masterserver), optional UDP (A2S) | eingebaut | Primär über die SCUM-Masterserverliste; direkte A2S-Abfrage bleibt als Zusatzweg aktiv. Liefert unter anderem Servername, Version, Spielerzahl und gemeldeten Port. |
 
 ### A2S-Hinweise
 
@@ -29,7 +29,7 @@ Bei Path of Titans muss die Source-Query-Funktion serverseitig aktiviert sein; l
 - Satisfactory nutzt ein eigenes Lightweight-Query-UDP-Format. Das Tool wertet Magic, Antworttyp, Version, Cookie, Serverzustand, NetCL, Flags und Teilzustände aus.
 - FiveM liefert Statusdaten typischerweise über HTTP-JSON-Endpunkte. Diese Endpunkte können deaktiviert oder geschützt sein.
 - Palworld nutzt für Serverinformationen die offizielle REST API. Die REST API muss aktiviert und ihr Port erreichbar sein. Zugangsdaten werden in diesem reinen Info-Adapter nicht automatisch erraten oder gespeichert.
-- SCUM registriert Server über die SCUM-Masterserver. Der Adapter versucht direkte A2S-/Steam-Query-Ports und fragt parallel die SCUM-Masterserver ab. Dabei werden die eingegebene Portnummer sowie typische Nachbarports abgeglichen. Dadurch kann ein Server auch dann erkannt werden, wenn SCUM selbst keinen direkten A2S-Endpunkt bereitstellt. Bei der 4NetPlayers-Zuordnung aus dem Test sind `7777` (Panel-IP/Port) und `7780` (zusätzlicher Gameport) beide relevante Kandidaten.
+- SCUM registriert Server über die SCUM-Masterserver. Der Adapter fragt die SCUM-Masterserver parallel über TCP/1040 ab und versucht ergänzend direkte A2S-/Steam-Query-Ports. Dabei werden die eingegebene Portnummer sowie typische Nachbarports abgeglichen. Dadurch kann ein Server auch dann erkannt werden, wenn SCUM selbst keinen direkten A2S-Endpunkt bereitstellt. Bei der 4NetPlayers-Zuordnung aus dem Test sind `7777` (Panel-IP/Port) und `7780` (zusätzlicher Gameport) beide relevante Kandidaten.
 
 ## RCON-Adapter
 
@@ -45,7 +45,7 @@ RCON-Befehle sind spielspezifisch. Das Tool übermittelt den eingegebenen Befehl
 
 Diese Titel werden bei einer passenden Protokollantwort über den generischen A2S-Adapter unterstützt, soweit die konkrete Serverversion A2S anbietet: ARK, Arma 3, Arma Reforger, Conan Exiles, DayZ, Garry's Mod, Hell Let Loose, Insurgency Sandstorm, Killing Floor 2, Mordhau, Myth of Empires, Path of Titans, Project Zomboid, Rust, 7 Days to Die, Satisfactory, Squad, The Forest, The Front, The Isle, Unturned, Valheim, VEIN, V Rising und weitere Valve-/Steam-Query-Titel.
 
-Für Spiele mit EOS, proprietärer HTTP-API oder modabhängigem Query gibt es keine pauschale A2S-Garantie. Dazu gehören insbesondere Varianten von Enshrouded, The Isle Evrima, Farming Simulator, Terraria/TShock, BattleBit, Ground Branch und Vintage Story. SCUM ist davon ausgenommen, da dafür ein eigener A2S-Adapter mit Portvarianten eingebaut ist.
+Für Spiele mit EOS, proprietärer HTTP-API oder modabhängigem Query gibt es keine pauschale A2S-Garantie. Dazu gehören insbesondere Varianten von Enshrouded, The Isle Evrima, Farming Simulator, Terraria/TShock, BattleBit, Ground Branch und Vintage Story. SCUM ist davon ausgenommen, da dafür ein eigener Masterserver-Adapter mit Portvarianten eingebaut ist.
 
 ## Konfigurations- und Port-Hinweise
 
