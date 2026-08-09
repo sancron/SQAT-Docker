@@ -27,6 +27,7 @@ export type QueryResult = {
   transport: string;
   target: string;
   latencyMs?: number;
+  serverPingMs?: number;
   message: string;
   fields: Record<string, FieldValue>;
   players?: Array<Record<string, FieldValue>>;
@@ -106,6 +107,13 @@ function readUInt32LE(data: Uint8Array, offset: number): number {
     readExactSync(data, offset, 4).byteOffset,
     4,
   ).getUint32(0, true);
+}
+function readFloat32LE(data: Uint8Array, offset: number): number {
+  return new DataView(
+    readExactSync(data, offset, 4).buffer,
+    readExactSync(data, offset, 4).byteOffset,
+    4,
+  ).getFloat32(0, true);
 }
 function readBigUInt64LE(data: Uint8Array, offset: number): bigint {
   const bytes = readExactSync(data, offset, 8);
@@ -500,6 +508,8 @@ type ScumMasterRecord = {
   name: string;
   players: number;
   maxPlayers: number;
+  serverPingMs: number;
+  tps: number;
 };
 
 async function writeScumTcp(
@@ -569,6 +579,10 @@ function parseScumMasterRecords(data: Uint8Array): ScumMasterRecord[] {
       // after the 0xDEAD marker.
       players: data[offset + 9],
       maxPlayers: data[offset + 10],
+      // These little-endian floats match the in-game server-list ping and
+      // the server-reported tick rate (e.g. 16.53 ms and 4.999 TPS).
+      serverPingMs: readFloat32LE(data, offset + 13),
+      tps: readFloat32LE(data, offset + 17),
       name: decoder.decode(data.subarray(nameStart, nameEnd)).trim(),
     });
     offset = trailerStart + SCUM_MASTER_RECORD_TRAILER.length;
@@ -675,16 +689,27 @@ async function queryScumViaMaster(
       "scum_master_unavailable",
     );
   }
+  const masterLatencyMs = Math.round(performance.now() - started);
   return {
     online: true,
     transport: "SCUM Query (Masterserver)",
     target: displayTarget(host, port),
-    latencyMs: Math.round(performance.now() - started),
+    latencyMs: masterLatencyMs,
+    serverPingMs: Number.isFinite(record.serverPingMs)
+      ? Math.round(record.serverPingMs)
+      : undefined,
     message: "Der SCUM-Server antwortet über die SCUM-Serverliste.",
     fields: {
       "Servername": record.name,
       "Spieler": record.players,
       "Maximale Spieler": record.maxPlayers,
+      "Server-Ping": Number.isFinite(record.serverPingMs)
+        ? Math.round(record.serverPingMs)
+        : undefined,
+      "TPS": Number.isFinite(record.tps)
+        ? Number(record.tps.toFixed(3))
+        : undefined,
+      "Masterserver-Abfrage": masterLatencyMs,
       "Gemeldeter SCUM-Port": record.port,
       "SCUM-IP": record.ip,
     },
