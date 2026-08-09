@@ -15,7 +15,8 @@ export type QueryProtocol =
   | "minecraft-bedrock"
   | "satisfactory"
   | "fivem"
-  | "palworld-rest";
+  | "palworld-rest"
+  | "scum";
 export type RconProtocol =
   | "source-rcon"
   | "battlEye-rcon"
@@ -332,6 +333,208 @@ async function queryPalworldRest(
   }
 }
 
+const SCUM_MASTER_SERVERS: ReadonlyArray<[string, number]> = [
+  ["176.57.138.2", 1040],
+  ["172.107.16.215", 1040],
+  ["206.189.248.133", 1040],
+];
+const SCUM_QUERY_TIMEOUT_MS = 5_000;
+const SCUM_RECORD_SIZE = 127;
+
+type ScumServerRecord = {
+  ip: string;
+  port: number;
+  name: string;
+  players: number;
+  maxPlayers: number;
+  password: boolean;
+  version: string;
+};
+
+async function writeTcpAll(
+  conn: Deno.Conn,
+  data: Uint8Array,
+): Promise<void> {
+  let offset = 0;
+  while (offset < data.length) {
+    const written = await timeout(
+      conn.write(data.subarray(offset)),
+      SCUM_QUERY_TIMEOUT_MS,
+    );
+    offset += written;
+  }
+}
+
+async function readTcpBytes(
+  conn: Deno.Conn,
+  length: number,
+): Promise<Uint8Array> {
+  const result = new Uint8Array(length);
+  let offset = 0;
+  while (offset < length) {
+    const read = await timeout(
+      conn.read(result.subarray(offset)),
+      SCUM_QUERY_TIMEOUT_MS,
+    );
+    if (read === null) {
+      throw new Error("SCUM-Masterserver hat die Verbindung beendet.");
+    }
+    offset += read;
+  }
+  return result;
+}
+
+function parseScumVersion(data: Uint8Array, offset: number): string {
+  const bytes = Array.from(data.subarray(offset, offset + 8)).reverse();
+  const parts = [
+    bytes[0],
+    bytes[1],
+    Number.parseInt(
+      bytes.slice(2, 4).map((value) => value.toString(16).padStart(2, "0"))
+        .join(""),
+      16,
+    ),
+    Number.parseInt(
+      bytes.slice(4).map((value) => value.toString(16).padStart(2, "0"))
+        .join(""),
+      16,
+    ),
+  ];
+  return parts.join(".");
+}
+
+function parseScumRecords(data: Uint8Array): ScumServerRecord[] {
+  const records: ScumServerRecord[] = [];
+  for (
+    let offset = 0;
+    offset + SCUM_RECORD_SIZE <= data.length;
+    offset += SCUM_RECORD_SIZE
+  ) {
+    const ip = [
+      data[offset + 3],
+      data[offset + 2],
+      data[offset + 1],
+      data[offset],
+    ].join(".");
+    const port = data[offset + 4] | (data[offset + 5] << 8);
+    const name = decoder.decode(
+      data.subarray(offset + 6, offset + 106),
+    ).replace(/\0+$/g, "").trim();
+    records.push({
+      ip,
+      port,
+      name,
+      players: data[offset + 107],
+      maxPlayers: data[offset + 108],
+      password: ((data[offset + 111] >> 1) & 1) === 1,
+      version: parseScumVersion(data, offset + 119),
+    });
+  }
+  return records;
+}
+
+async function queryScumMaster(
+  host: string,
+  port: number,
+): Promise<ScumServerRecord[]> {
+  const conn = await timeout(
+    Deno.connect({ hostname: host, port }),
+    SCUM_QUERY_TIMEOUT_MS,
+  );
+  try {
+    await writeTcpAll(conn, Uint8Array.from([0x04, 0x03, 0x00, 0x00]));
+    const header = await readTcpBytes(conn, 2);
+    const total = header[0] | (header[1] << 8);
+    if (total > 100_000) {
+      throw new Error("Ungültige SCUM-Serveranzahl.");
+    }
+    const records = await readTcpBytes(conn, total * SCUM_RECORD_SIZE);
+    return parseScumRecords(records);
+  } finally {
+    conn.close();
+  }
+}
+
+async function resolveScumIPv4(host: string): Promise<string> {
+  const normalized = host.replace(/^\[|\]$/g, "");
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalized)) return normalized;
+  const addresses = await timeout(
+    Deno.resolveDns(normalized, "A"),
+    SCUM_QUERY_TIMEOUT_MS,
+  );
+  if (!addresses[0]) {
+    throw new Error("Keine IPv4-Adresse für den SCUM-Host gefunden.");
+  }
+  return addresses[0];
+}
+
+async function queryScum(
+  host: string,
+  port: number,
+): Promise<QueryResult> {
+  const started = performance.now();
+  const targetIp = await resolveScumIPv4(host);
+  const matches: ScumServerRecord[] = [];
+  const masterErrors: string[] = [];
+
+  for (const [masterHost, masterPort] of SCUM_MASTER_SERVERS) {
+    try {
+      const records = await queryScumMaster(masterHost, masterPort);
+      matches.push(...records.filter((record) => record.ip === targetIp));
+      if (matches.some((record) => record.port === port)) break;
+    } catch (error) {
+      masterErrors.push(
+        error instanceof Error ? error.message : "Netzwerkfehler",
+      );
+    }
+  }
+
+  const exact = matches.find((record) => record.port === port);
+  const unique = [
+    ...new Map(matches.map((record) => [record.port, record])).values(),
+  ];
+  const record = exact ?? (unique.length === 1 ? unique[0] : undefined);
+
+  if (!record) {
+    if (unique.length > 1) {
+      throw new AdapterError(
+        "SCUM-Server gefunden, aber keiner der gemeldeten Query-Ports entspricht der Eingabe: " +
+          unique.map((item) => String(item.port)).join(", ") + ".",
+        "scum_port_mismatch",
+      );
+    }
+    throw new AdapterError(
+      masterErrors.length > 0
+        ? "SCUM-Masterserver waren nicht erreichbar oder lieferten keine verwertbare Antwort."
+        : "Der SCUM-Server wurde in den SCUM-Masterserverlisten nicht gefunden.",
+      "scum_unavailable",
+    );
+  }
+
+  const warnings = record.port === port ? undefined : [
+    "Die SCUM-Masterserver melden diesen Server unter Query-Port " +
+    record.port + " statt unter " + port + ".",
+  ];
+
+  return {
+    online: true,
+    transport: "SCUM Query (TCP / Masterserver)",
+    target: displayTarget(host, port),
+    latencyMs: Math.round(performance.now() - started),
+    message: "Der SCUM-Server antwortet über den SCUM-Masterserver.",
+    fields: {
+      "Servername": record.name,
+      "Spieler": record.players,
+      "Maximale Spieler": record.maxPlayers,
+      "Version": record.version,
+      "Passwort geschützt": record.password,
+      "Gemeldeter Query-Port": record.port,
+      "SCUM-IP": record.ip,
+    },
+    warnings,
+  };
+}
+
 export async function querySpecial(
   protocol: Exclude<
     QueryProtocol,
@@ -342,6 +545,7 @@ export async function querySpecial(
 ): Promise<QueryResult> {
   if (protocol === "satisfactory") return querySatisfactory(host, port);
   if (protocol === "fivem") return queryFiveM(host, port);
+  if (protocol === "scum") return queryScum(host, port);
   return queryPalworldRest(host, port);
 }
 
@@ -645,6 +849,13 @@ export const queryAdapterInfo = [
     transport: "HTTP",
     status: "built-in",
     games: "Palworld Dedicated Server mit aktivierter REST API",
+  },
+  {
+    id: "scum",
+    name: "SCUM Query",
+    transport: "TCP",
+    status: "built-in",
+    games: "SCUM Dedicated Server über die SCUM-Masterserver",
   },
 ];
 export const rconAdapterInfo = [

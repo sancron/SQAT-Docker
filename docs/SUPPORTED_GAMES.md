@@ -16,6 +16,7 @@ Das Tool entscheidet nicht anhand des Spielnamens, sondern anhand einer echten P
 | Satisfactory Lightweight Query | UDP | eingebaut | Satisfactory; liefert primär Status-/Versionsdaten, keine standardisierten Spielerlisten. |
 | FiveM HTTP Query | HTTP | eingebaut | FiveM mit erreichbaren `info.json`, `players.json` und/oder `dynamic.json`-Endpunkten. |
 | Palworld REST API | HTTP | eingebaut | Palworld Dedicated Server mit aktivierter REST API; der Info-Endpunkt ist `/v1/api/info`. |
+| SCUM Query | TCP | eingebaut | SCUM Dedicated Server über die offiziellen SCUM-Masterserver; liefert Servername, Version, Spielerzahl, Passwortstatus und gemeldeten Port. |
 
 ### A2S-Hinweise
 
@@ -28,6 +29,7 @@ Bei Path of Titans muss die Source-Query-Funktion serverseitig aktiviert sein; l
 - Satisfactory nutzt ein eigenes Lightweight-Query-UDP-Format. Das Tool wertet Magic, Antworttyp, Version, Cookie, Serverzustand, NetCL, Flags und Teilzustände aus.
 - FiveM liefert Statusdaten typischerweise über HTTP-JSON-Endpunkte. Diese Endpunkte können deaktiviert oder geschützt sein.
 - Palworld nutzt für Serverinformationen die offizielle REST API. Die REST API muss aktiviert und ihr Port erreichbar sein. Zugangsdaten werden in diesem reinen Info-Adapter nicht automatisch erraten oder gespeichert.
+- SCUM nutzt ein eigenes TCP-Masterserver-Protokoll. Der Adapter fragt die SCUM-Masterserver ab und ordnet die Ziel-IP sowie den eingegebenen oder gemeldeten Query-Port zu. Der direkte Spielport ist nicht automatisch der Query-Port.
 
 ## RCON-Adapter
 
@@ -43,7 +45,7 @@ RCON-Befehle sind spielspezifisch. Das Tool übermittelt den eingegebenen Befehl
 
 Diese Titel werden bei einer passenden Protokollantwort über den generischen A2S-Adapter unterstützt, soweit die konkrete Serverversion A2S anbietet: ARK, Arma 3, Arma Reforger, Conan Exiles, DayZ, Garry's Mod, Hell Let Loose, Insurgency Sandstorm, Killing Floor 2, Mordhau, Myth of Empires, Path of Titans, Project Zomboid, Rust, 7 Days to Die, Satisfactory, Squad, The Forest, The Front, The Isle, Unturned, Valheim, VEIN, V Rising und weitere Valve-/Steam-Query-Titel.
 
-Für Spiele mit EOS, proprietärer HTTP-API oder modabhängigem Query gibt es keine pauschale A2S-Garantie. Dazu gehören insbesondere Varianten von Enshrouded, The Isle Evrima, Farming Simulator, Terraria/TShock, SCUM, BattleBit, Ground Branch und Vintage Story. Diese Fälle bleiben in der Dokumentation bewusst als „separat zu prüfen“ markiert, statt ein nicht verifiziertes Paketformat zu simulieren.
+Für Spiele mit EOS, proprietärer HTTP-API oder modabhängigem Query gibt es keine pauschale A2S-Garantie. Dazu gehören insbesondere Varianten von Enshrouded, The Isle Evrima, Farming Simulator, Terraria/TShock, BattleBit, Ground Branch und Vintage Story. SCUM ist davon ausgenommen, da dafür inzwischen ein eigener Masterserver-Adapter eingebaut ist.
 
 ## Konfigurations- und Port-Hinweise
 
@@ -73,5 +75,7 @@ Für Spiele mit EOS, proprietärer HTTP-API oder modabhängigem Query gibt es ke
 - [Minecraft Server List Ping](https://minecraft.wiki/w/Java_Edition_protocol/Server_List_Ping)
 - [Palworld REST API](https://docs.palworldgame.com/category/rest-api)
 - [Rust Dedicated Server / WebRCON](https://wiki.facepunch.com/rust/Creating_a_server)
+- [SCUM Dedicated Server Setup](https://scum.wiki.gg/wiki/Scum_Dedicated_server_setup)
+- [OpenGSQ SCUM Protocol](https://python.opengsq.com/api/opengsq.protocols.scum.html)
 - [Factorio Server Command Line / RCON](https://wiki.factorio.com/Command_line_parameters)
 - [Eco RCON](https://wiki.play.eco/en/Server_Commands)
